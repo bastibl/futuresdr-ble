@@ -6,6 +6,11 @@ This example implements a Bluetooth Low Energy sniffer for FutureSDR. It
 receives BLE 1M signals from an SDR, demodulates GFSK packets, performs
 dewhitening and CRC validation, and prints decoded link-layer packet summaries.
 
+This standalone crate is based on the Bluetooth sniffer contributed by
+[@mucaglar](https://github.com/mucaglar) in
+[FutureSDR pull request #244](https://github.com/FutureSDR/FutureSDR/pull/244).
+It has been adapted to use the published FutureSDR 0.6.0 crates.
+
 The sniffer supports direct reception of a single BLE channel and PFB-based
 reception of multiple selected channels. It parses legacy and extended
 advertising headers, advertising data, and `CONNECT_IND` parameters. Connection
@@ -158,3 +163,7 @@ BLE summary: ch=37 mode=burst packets=9397 connect_ind=0 crc_passes=8908 crc_che
 
 When connection following is enabled, the receiver also reports tracked data
 packets, connection state, and timing recovery.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
