@@ -400,7 +400,9 @@ fn decode_data_candidate(
 }
 
 fn bits_to_bytes(bits: &[u8], inverted: bool) -> Vec<u8> {
-    bits.chunks_exact(8)
+    bits.as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| {
             chunk
                 .iter()

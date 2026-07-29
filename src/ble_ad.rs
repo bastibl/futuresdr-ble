@@ -99,7 +99,9 @@ fn format_ad_structure(ad: &BleAdStructure) -> String {
 
 fn format_uuid16_list(label: &str, data: &[u8]) -> String {
     let values = data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
         .map(|uuid| format!("0x{uuid:04X}"))
         .collect::<Vec<_>>()
