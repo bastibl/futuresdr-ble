@@ -30,7 +30,7 @@ use crate::cli::DecoderMode;
 use crate::gmsk_demod;
 
 pub(crate) fn build_single_channel_flowgraph(
-    mut fg: &mut Flowgraph,
+    fg: &mut Flowgraph,
     args: &Args,
     sample_rate: f64,
 ) -> Result<()> {
@@ -115,7 +115,6 @@ pub(crate) fn build_single_channel_flowgraph(
                 .antenna(args.antenna.clone())
                 .build_source()?;
             connect!(fg, src.outputs[0] > ble_burst > snk);
-            fg.message(src, "overflow", ble_burst, "rx_overflow")?;
             connect_wireshark(fg, ble_burst, args)?;
         }
     } else {
@@ -165,7 +164,7 @@ pub(crate) fn build_single_channel_flowgraph(
 }
 
 pub(crate) fn build_multi_channel_flowgraph(
-    mut fg: &mut Flowgraph,
+    fg: &mut Flowgraph,
     args: &Args,
     sample_rate: f64,
     decode_channels: &[u8],
@@ -219,12 +218,11 @@ pub(crate) fn build_multi_channel_flowgraph(
 
     for port in 0..pfb_channels {
         if !selected_ports.contains(&port) {
-            let snk = fg.add(NullSink::<Complex32>::new());
+            let snk = fg.add(NullSink::<Complex32>::new())?;
             fg.stream_dyn(channelizer, format!("outputs[{port}]"), snk, "input")?;
         }
     }
 
-    let mut overflow_receiver_connected = false;
     for (channel, channel_frequency, port) in channel_ports {
         let port_name = format!("outputs[{port}]");
         println!(
@@ -233,7 +231,7 @@ pub(crate) fn build_multi_channel_flowgraph(
         );
 
         let rx_taps = gmsk_demod::gmsk_rx_taps(samples_per_symbol)?;
-        let snk = fg.add(NullSink::<u8>::new());
+        let snk = fg.add(NullSink::<u8>::new())?;
 
         if args.decoder_mode() == DecoderMode::Burst {
             let ble_burst =
@@ -254,16 +252,12 @@ pub(crate) fn build_multi_channel_flowgraph(
                         },
                     )?
                     .with_connections(connections.clone()),
-                );
+                )?;
             fg.stream_dyn(channelizer, port_name, ble_burst, "input")?;
             connect!(fg, ble_burst > snk);
-            if !overflow_receiver_connected {
-                fg.message(src, "overflow", ble_burst, "rx_overflow")?;
-                overflow_receiver_connected = true;
-            }
             connect_wireshark(fg, ble_burst, args)?;
         } else {
-            let gmsk_filter = fg.add(FirBuilder::fir::<Complex32, Complex32, _>(rx_taps));
+            let gmsk_filter = fg.add(FirBuilder::fir::<Complex32, Complex32, _>(rx_taps))?;
             let ble_sync = fg.add(ble_sync::BleSyncBlock::<
                 DefaultCpuReader<f32>,
                 DefaultCpuWriter<u8>,
@@ -274,8 +268,8 @@ pub(crate) fn build_multi_channel_flowgraph(
                 !args.quiet,
                 args.wireshark,
             )
-            .with_connections(connections.clone()));
-            let discriminator = fg.add(discriminator_block());
+            .with_connections(connections.clone()))?;
+            let discriminator = fg.add(discriminator_block())?;
             fg.stream_dyn(channelizer, port_name, gmsk_filter, "input")?;
             connect!(fg, gmsk_filter > discriminator > ble_sync > snk);
             connect_wireshark(fg, ble_sync, args)?;
@@ -297,7 +291,7 @@ fn connect_wireshark(fg: &mut Flowgraph, source: impl Into<BlockId>, args: &Args
         return Ok(());
     }
 
-    let udp = fg.add(BlobToUdp::new(&args.wireshark_addr));
+    let udp = fg.add(BlobToUdp::new(&args.wireshark_addr))?;
     fg.message(source.into(), "wireshark", udp, "in")?;
     println!(
         "Streaming BLE LL packets to Wireshark UDP endpoint {}.",

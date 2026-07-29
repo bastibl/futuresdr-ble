@@ -261,16 +261,16 @@ mod tests {
         taps: &[f32],
     ) -> Result<Vec<f64>> {
         let mut fg = Flowgraph::new();
-        let src = fg.add(VectorSource::<Complex32>::new(input));
+        let src = fg.add(VectorSource::<Complex32>::new(input))?;
         let channelizer = fg.add(PfbChannelizer::<
             DefaultCpuReader<Complex32>,
             DefaultCpuWriter<Complex32>,
-        >::new(pfb_channels, taps, 1.0));
+        >::new(pfb_channels, taps, 1.0))?;
         fg.stream_dyn(src, "output", channelizer, "input")?;
 
         let mut sinks = Vec::with_capacity(pfb_channels);
         for port in 0..pfb_channels {
-            let sink = fg.add(VectorSink::<Complex32>::new(2048));
+            let sink = fg.add(VectorSink::<Complex32>::new(2048))?;
             fg.stream_dyn(channelizer, format!("outputs[{port}]"), sink, "input")?;
             sinks.push(sink);
         }

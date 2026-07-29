@@ -97,7 +97,7 @@ where
         &mut self,
         _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
+        _meta: &BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
         let Pmt::U64(sequence) = p else {
@@ -389,7 +389,7 @@ where
         &mut self,
         _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
+        _meta: &BlockMeta,
     ) -> Result<()> {
         let n = self.input.slice().len();
         if n == 0 {
@@ -424,7 +424,7 @@ where
         Ok(())
     }
 
-    async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
+    async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
         if let Some(burst) = self.catcher.finish(false) {
             let packets = self.process_burst(burst);
             if self.wireshark_output {

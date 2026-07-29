@@ -233,7 +233,7 @@ where
         &mut self,
         _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
+        _meta: &BlockMeta,
     ) -> Result<()> {
         let n = self.input.slice().len();
 
@@ -287,7 +287,7 @@ where
         Ok(())
     }
 
-    async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
+    async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
         self.flush_all_crc_rejects();
         if self.wireshark_output {
             _mo.post("wireshark", Pmt::Finished).await?;

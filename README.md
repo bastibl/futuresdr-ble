@@ -157,4 +157,4 @@ BLE summary: ch=37 mode=burst packets=9397 connect_ind=0 crc_passes=8908 crc_che
 ```
 
 When connection following is enabled, the receiver also reports tracked data
-packets, connection state, timing recovery, and SDR overflow events.
+packets, connection state, and timing recovery.

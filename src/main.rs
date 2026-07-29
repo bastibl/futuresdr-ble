@@ -93,7 +93,7 @@ fn main() -> Result<()> {
         shutdown_rx.recv()?;
     }
 
-    Runtime::block_on(async move {
+    futuresdr::runtime::block_on(async move {
         match running.stop().await {
             Ok(()) | Err(RuntimeError::FlowgraphTerminated) => {}
             Err(err) => return Err(err.into()),

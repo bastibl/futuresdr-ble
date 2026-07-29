@@ -1,5 +1,5 @@
 [package]
-name = "bluetooth"
+name = "futuresdr-ble"
 version = "0.1.0"
 edition = "2024"
 default-run = "sniffer"
@@ -19,6 +19,6 @@ soapy = ["futuresdr/soapy"]
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
-futuresdr = { path = "../..", features = ["seify"] }
-futuredsp = { path = "../../crates/futuredsp" }
+futuresdr = { version = "0.6.0", features = ["seify"] }
+futuredsp = "0.6.0"
 yagi = "0.1.5"
