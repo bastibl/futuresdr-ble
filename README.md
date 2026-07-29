@@ -25,6 +25,24 @@ Two decoder modes are available:
 - `burst` detects signal bursts before decoding and is the default for
   multi-channel reception.
 
+## Hardware Backends
+
+The default feature enables SoapySDR:
+
+```sh
+cargo run --release -- --args driver=soapy
+```
+
+To use the native RTL-SDR backend instead:
+
+```sh
+cargo run --release --no-default-features --features rtlsdr -- \
+  --args driver=rtlsdr
+```
+
+Simulation and offline IQ decoding do not require an SDR backend and can be
+built with `--no-default-features`.
+
 ## Single-Channel Reception
 
 Run the receiver from this directory:
@@ -94,7 +112,8 @@ Simulation mode generates BLE advertising packets and passes them through the
 GMSK receive chain without SDR hardware:
 
 ```sh
-cargo run --release -- --simulate --decoder burst --simulate-packets 10
+cargo run --release --no-default-features -- \
+  --simulate --decoder burst --simulate-packets 10
 ```
 
 The flowgraph runs until all generated samples have been processed.
@@ -113,7 +132,8 @@ The selected channel must match the recording center frequency, and the sample
 rate must match the recorded waveform:
 
 ```sh
-cargo run --release -- --iq-file ble_capture.iq --sample-rate 2e6 --channels 37 --decoder burst --quiet
+cargo run --release --no-default-features -- \
+  --iq-file ble_capture.iq --sample-rate 2e6 --channels 37 --decoder burst --quiet
 ```
 
 File input runs to EOF and then shuts down automatically.
