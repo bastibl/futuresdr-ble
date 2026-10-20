@@ -68,12 +68,10 @@ pub(crate) fn build_single_channel_flowgraph(
 
     let rx_taps = gmsk_demod::gmsk_rx_taps(samples_per_symbol)?;
     println!("GMSK receive filter configured.");
-    let snk = NullSink::<u8>::new();
 
     if args.decoder_mode() == DecoderMode::Burst {
         let ble_burst = ble_iq_burst::BleIqBurstBlock::<
             DefaultCpuReader<Complex32>,
-            DefaultCpuWriter<u8>,
         >::with_packet_and_wireshark_output(
             phy,
             samples_per_symbol,
@@ -96,7 +94,7 @@ pub(crate) fn build_single_channel_flowgraph(
                 channel_index,
             );
             let src = VectorSource::<Complex32>::new(simulated_samples);
-            connect!(fg, src > ble_burst > snk);
+            connect!(fg, src > ble_burst);
             connect_wireshark(fg, ble_burst, args)?;
         } else if let Some(iq_file) = &args.iq_file {
             println!(
@@ -104,7 +102,7 @@ pub(crate) fn build_single_channel_flowgraph(
                 iq_file.display()
             );
             let src = FileSource::<Complex32>::new(iq_file, false);
-            connect!(fg, src > ble_burst > snk);
+            connect!(fg, src > ble_burst);
             connect_wireshark(fg, ble_burst, args)?;
         } else {
             println!("Hardware mode: Deploying Seify source live SDR chain");
@@ -114,10 +112,11 @@ pub(crate) fn build_single_channel_flowgraph(
                 .gain(args.gain)
                 .antenna(args.antenna.clone())
                 .build_source()?;
-            connect!(fg, src.outputs[0] > ble_burst > snk);
+            connect!(fg, src.outputs[0] > ble_burst);
             connect_wireshark(fg, ble_burst, args)?;
         }
     } else {
+        let snk = NullSink::<u8>::new();
         let gmsk_filter = FirBuilder::fir::<Complex32, Complex32, _>(rx_taps);
         let ble_sync = ble_sync::BleSyncBlock::<DefaultCpuReader<f32>, DefaultCpuWriter<u8>>::with_channel_phase_packet_and_wireshark_output(
             samples_per_symbol,
@@ -231,15 +230,13 @@ pub(crate) fn build_multi_channel_flowgraph(
         );
 
         let rx_taps = gmsk_demod::gmsk_rx_taps(samples_per_symbol)?;
-        let snk = fg.add(NullSink::<u8>::new())?;
 
         if args.decoder_mode() == DecoderMode::Burst {
             let ble_burst =
                 fg.add(
                     ble_iq_burst::BleIqBurstBlock::<
                         DefaultCpuReader<Complex32>,
-                        DefaultCpuWriter<u8>,
-                    >::with_packet_and_wireshark_output(
+                                >::with_packet_and_wireshark_output(
                         phy,
                         samples_per_symbol,
                         channel,
@@ -254,14 +251,13 @@ pub(crate) fn build_multi_channel_flowgraph(
                     .with_connections(connections.clone()),
                 )?;
             fg.stream_dyn(channelizer, port_name, ble_burst, "input")?;
-            connect!(fg, ble_burst > snk);
             connect_wireshark(fg, ble_burst, args)?;
         } else {
+            let snk = fg.add(NullSink::<u8>::new())?;
             let gmsk_filter = fg.add(FirBuilder::fir::<Complex32, Complex32, _>(rx_taps))?;
             let ble_sync = fg.add(ble_sync::BleSyncBlock::<
                 DefaultCpuReader<f32>,
-                DefaultCpuWriter<u8>,
-            >::with_channel_phase_packet_and_wireshark_output(
+                >::with_channel_phase_packet_and_wireshark_output(
                 samples_per_symbol,
                 channel,
                 0,

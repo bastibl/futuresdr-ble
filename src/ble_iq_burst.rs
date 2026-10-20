@@ -35,15 +35,12 @@ pub struct BleIqBurstOptions {
 #[derive(Block)]
 #[message_inputs(frequency)]
 #[message_outputs(wireshark, packets)]
-pub struct BleIqBurstBlock<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
+pub struct BleIqBurstBlock<I = DefaultCpuReader<Complex32>>
 where
     I: CpuBufferReader<Item = Complex32>,
-    O: CpuBufferWriter<Item = u8>,
 {
     #[input]
     input: I,
-    #[output]
-    output: O,
     channel_index: u8,
     sample_rate_hz: u64,
     print_packets: bool,
@@ -55,10 +52,9 @@ where
     connections: SharedConnectionTable,
 }
 
-impl<I, O> BleIqBurstBlock<I, O>
+impl<I> BleIqBurstBlock<I>
 where
     I: CpuBufferReader<Item = Complex32>,
-    O: CpuBufferWriter<Item = u8>,
 {
     pub fn with_packet_and_wireshark_output(
         phy: BlePhy,
@@ -72,7 +68,6 @@ where
         let filter_history = filter_taps.len().saturating_sub(1);
         Ok(Self {
             input: I::default(),
-            output: O::default(),
             channel_index,
             sample_rate_hz: phy.symbol_rate_hz() as u64 * samples_per_symbol as u64,
             print_packets: options.print_packets,
@@ -398,10 +393,9 @@ where
     }
 }
 
-impl<I, O> Kernel for BleIqBurstBlock<I, O>
+impl<I> Kernel for BleIqBurstBlock<I>
 where
     I: CpuBufferReader<Item = Complex32>,
-    O: CpuBufferWriter<Item = u8>,
 {
     async fn work(
         &mut self,
@@ -518,20 +512,19 @@ fn add_phase_counts(accumulator: &mut [u64], counts: &[u64]) {
 mod tests {
     use super::should_gate_data_burst;
     use super::*;
-    use futuresdr::runtime::mocker::{Mocker, Reader, Writer};
+    use futuresdr::runtime::mocker::{Mocker, Reader};
 
     #[test]
     fn frequency_handler_retunes_whitening_and_decodes_all_advertising_channels() {
-        let receiver =
-            BleIqBurstBlock::<Reader<Complex32>, Writer<u8>>::with_packet_and_wireshark_output(
-                BlePhy::Le1M,
-                2,
-                37,
-                crate::gmsk_demod::gmsk_rx_taps(2).unwrap(),
-                SquelchConfig::adaptive(13.0),
-                BleIqBurstOptions::default(),
-            )
-            .unwrap();
+        let receiver = BleIqBurstBlock::<Reader<Complex32>>::with_packet_and_wireshark_output(
+            BlePhy::Le1M,
+            2,
+            37,
+            crate::gmsk_demod::gmsk_rx_taps(2).unwrap(),
+            SquelchConfig::adaptive(13.0),
+            BleIqBurstOptions::default(),
+        )
+        .unwrap();
         let mut mocker = Mocker::new(receiver);
         mocker.init();
         for invalid in [
