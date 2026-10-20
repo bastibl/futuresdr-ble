@@ -19,11 +19,18 @@ uhd = ["futuresdr/uhd"]
 
 [dependencies]
 anyhow = "1.0"
+futuresdr = { version = "0.10", features = ["seify"] }
+futuredsp = "0.10"
+yagi = "0.1.5"
+web-time = "1.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
-futuresdr = { path = "../futuresdr", features = ["seify"] }
-futuredsp = { path = "../futuresdr/crates/futuredsp" }
-yagi = "0.1.5"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Yagi uses rand 0.8 / getrandom 0.2.
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
-futuresdr = { path = "../futuresdr", features = ["mocker", "seify"] }
+futuresdr = { version = "0.10", features = ["mocker", "seify"] }

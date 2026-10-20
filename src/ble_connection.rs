@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::ble_channel_selection::BleChannelSelectionAlgorithm;
 use crate::ble_channel_selection::BleChannelSelector;

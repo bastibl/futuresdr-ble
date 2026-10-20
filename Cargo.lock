@@ -695,7 +695,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "futuredsp"
-version = "0.9.0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84531a31483984fe61e526a3eb591c34c11d1c270094e89163bb11bb85afd344"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -815,7 +817,9 @@ dependencies = [
 
 [[package]]
 name = "futuresdr"
-version = "0.9.0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40ef0d9d291aafa035c9762ec36fb2b1bd206db09fc6bb8269f84c6ee023043f"
 dependencies = [
  "anyhow",
  "async-executor",
@@ -874,12 +878,16 @@ dependencies = [
  "ctrlc",
  "futuredsp",
  "futuresdr",
+ "getrandom 0.2.17",
+ "web-time",
  "yagi",
 ]
 
 [[package]]
 name = "futuresdr-macros"
-version = "0.9.0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa7c20b4ac605b58203c73de827fc478bc44313b3a9617f3946a6fef087407a0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -888,7 +896,9 @@ dependencies = [
 
 [[package]]
 name = "futuresdr-types"
-version = "0.9.0"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5ae0fc8b5b3d31abd8ce16b763b566fab8a887fb808fd620a3305774ae88ee7"
 dependencies = [
  "dyn-clone",
  "num-complex",
@@ -905,8 +915,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
