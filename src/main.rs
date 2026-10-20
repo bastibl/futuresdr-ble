@@ -9,30 +9,12 @@ use futuresdr::runtime::Error as RuntimeError;
 
 use crate::cli::Args;
 
-mod ble_ad;
-mod ble_burst_catcher;
-mod ble_burst_decoder;
-mod ble_burst_stats;
-mod ble_channel_selection;
-mod ble_connection;
-mod ble_connection_follower;
-mod ble_connection_report;
-mod ble_control;
-mod ble_data;
-mod ble_detector;
-mod ble_iq_burst;
-mod ble_phy;
-mod ble_protocol;
-mod ble_sim;
-mod ble_slicer;
-mod ble_sync;
-mod ble_timing_recovery;
-mod ble_wireshark;
-mod channelizer;
+use futuresdr_ble::{
+    ble_connection, ble_iq_burst, ble_protocol, ble_sim, ble_sync, channelizer, gmsk_demod,
+};
+
 mod cli;
-mod diagnostics;
 mod flowgraph;
-mod gmsk_demod;
 
 fn main() -> Result<()> {
     futuresdr::runtime::init();

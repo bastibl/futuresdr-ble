@@ -4,10 +4,10 @@ use futuredsp::firdes::remez;
 
 use crate::ble_protocol;
 
-pub(crate) const BLE_CHANNEL_SPACING_HZ: f64 = 2.0e6;
+pub const BLE_CHANNEL_SPACING_HZ: f64 = 2.0e6;
 const MULTI_CHANNEL_GUARD_BINS: usize = 1;
 
-pub(crate) fn pfb_channelizer_taps(pfb_channels: usize) -> Vec<f32> {
+pub fn pfb_channelizer_taps(pfb_channels: usize) -> Vec<f32> {
     let transition_bw = 0.5;
     remez::low_pass(
         1.0,
@@ -23,7 +23,7 @@ pub(crate) fn pfb_channelizer_taps(pfb_channels: usize) -> Vec<f32> {
     .collect()
 }
 
-pub(crate) fn pfb_channels_from_sample_rate(sample_rate: f64) -> Result<usize> {
+pub fn pfb_channels_from_sample_rate(sample_rate: f64) -> Result<usize> {
     let channels = sample_rate / BLE_CHANNEL_SPACING_HZ;
     let rounded = channels.round();
 
@@ -42,7 +42,7 @@ pub(crate) fn pfb_channels_from_sample_rate(sample_rate: f64) -> Result<usize> {
     Ok(channels)
 }
 
-pub(crate) fn center_frequency_for_channels(channels: &[u8]) -> Result<f64> {
+pub fn center_frequency_for_channels(channels: &[u8]) -> Result<f64> {
     let frequencies_mhz: Vec<i32> = channels
         .iter()
         .map(|&channel| {
@@ -58,10 +58,7 @@ pub(crate) fn center_frequency_for_channels(channels: &[u8]) -> Result<f64> {
     Ok(center_bin as f64 * BLE_CHANNEL_SPACING_HZ)
 }
 
-pub(crate) fn auto_multi_channel_sample_rate(
-    channels: &[u8],
-    center_frequency: f64,
-) -> Result<f64> {
+pub fn auto_multi_channel_sample_rate(channels: &[u8], center_frequency: f64) -> Result<f64> {
     let max_offset_bins = channels
         .iter()
         .map(|&channel| {
@@ -80,7 +77,7 @@ pub(crate) fn auto_multi_channel_sample_rate(
     Ok(pfb_channels as f64 * BLE_CHANNEL_SPACING_HZ)
 }
 
-pub(crate) fn pfb_port_for_frequency(
+pub fn pfb_port_for_frequency(
     frequency: f64,
     center_frequency: f64,
     pfb_channels: usize,

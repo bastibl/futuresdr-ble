@@ -9,7 +9,8 @@ dewhitening and CRC validation, and prints decoded link-layer packet summaries.
 This standalone crate is based on the Bluetooth sniffer contributed by
 [@mucaglar](https://github.com/mucaglar) in
 [FutureSDR pull request #244](https://github.com/FutureSDR/FutureSDR/pull/244).
-It has been adapted to use the published FutureSDR 0.6.0 crates.
+It uses the local `../futuresdr` checkout, including its `futuredsp` crate.
+Keep these sibling repositories together when building this checkout.
 
 The sniffer supports direct reception of a single BLE channel and PFB-based
 reception of multiple selected channels. It parses legacy and extended
@@ -42,6 +43,30 @@ cargo run --release --no-default-features --features rtlsdr -- \
 
 Simulation and offline IQ decoding do not require an SDR backend and can be
 built with `--no-default-features`.
+
+For the Rust-native USRP B2xx driver:
+
+```sh
+cargo run --release --no-default-features --features uhd -- --args driver=uhd
+```
+
+## Library integration
+
+The library exports `BleIqBurstBlock`, `BleIqBurstOptions`, `SquelchConfig`, and
+`BlePhy`. The block is generic over its CPU input/output buffer types, so a
+host can select its own compatible buffers without wrapping the decoder.
+The command-line sniffer uses the same library.
+
+The `packets` message output emits `Pmt::String` summaries of CRC-validated
+advertising and data packets. It operates independently of console printing
+and the optional `wireshark` blob output. Both outputs send `Finished` at EOF
+(the Wireshark output only when enabled).
+
+FutureSDR Studio registers the receiver using
+`crates/studio/blocks/ble_receiver.toml` and supplies a native-UHD advertising
+channel 37 demo at 2.402 GHz / 2 MS/s, plus a deterministic simulation demo.
+Match the receiver's whitening channel to the SDR tuning, and its samples per
+symbol to the sample rate (2 MS/s means 2 samples per BLE 1M symbol).
 
 ## Single-Channel Reception
 

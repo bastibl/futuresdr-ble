@@ -26,15 +26,15 @@ pub use crate::ble_burst_catcher::SquelchConfig;
 const FOLLOW_GUARD_SYMBOLS: u64 = 2_048;
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct BleIqBurstOptions {
-    pub(crate) print_packets: bool,
-    pub(crate) wireshark_output: bool,
-    pub(crate) follow_connections: bool,
+pub struct BleIqBurstOptions {
+    pub print_packets: bool,
+    pub wireshark_output: bool,
+    pub follow_connections: bool,
 }
 
 #[derive(Block)]
 #[message_inputs(rx_overflow)]
-#[message_outputs(wireshark)]
+#[message_outputs(wireshark, packets)]
 pub struct BleIqBurstBlock<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
 where
     I: CpuBufferReader<Item = Complex32>,
@@ -88,7 +88,7 @@ where
         })
     }
 
-    pub(crate) fn with_connections(mut self, connections: SharedConnectionTable) -> Self {
+    pub fn with_connections(mut self, connections: SharedConnectionTable) -> Self {
         self.connections = connections;
         self
     }
@@ -413,6 +413,7 @@ where
         self.input.consume(n);
         for burst in bursts {
             let packets = self.process_burst(burst);
+            post_packet_summaries(_mo, &packets).await?;
             if self.wireshark_output {
                 post_wireshark_packets(_mo, &packets).await?;
             }
@@ -427,6 +428,7 @@ where
     async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &BlockMeta) -> Result<()> {
         if let Some(burst) = self.catcher.finish(false) {
             let packets = self.process_burst(burst);
+            post_packet_summaries(_mo, &packets).await?;
             if self.wireshark_output {
                 post_wireshark_packets(_mo, &packets).await?;
             }
@@ -434,6 +436,7 @@ where
         if self.wireshark_output {
             _mo.post("wireshark", Pmt::Finished).await?;
         }
+        _mo.post("packets", Pmt::Finished).await?;
         self.print_stats();
         Ok(())
     }
@@ -443,6 +446,21 @@ where
 struct ProcessedBurst {
     advertising: Vec<BlePacket>,
     data: Vec<BleDataPacket>,
+}
+
+async fn post_packet_summaries(mo: &mut MessageOutputs, packets: &ProcessedBurst) -> Result<()> {
+    for packet in &packets.advertising {
+        mo.post(
+            "packets",
+            Pmt::String(crate::ble_protocol::format_packet_summary(packet)),
+        )
+        .await?;
+    }
+    for packet in &packets.data {
+        mo.post("packets", Pmt::String(format_data_packet_summary(packet)))
+            .await?;
+    }
+    Ok(())
 }
 
 async fn post_wireshark_packets(mo: &mut MessageOutputs, packets: &ProcessedBurst) -> Result<()> {

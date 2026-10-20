@@ -91,7 +91,7 @@ where
         }
     }
 
-    pub(crate) fn with_connections(mut self, connections: SharedConnectionTable) -> Self {
+    pub fn with_connections(mut self, connections: SharedConnectionTable) -> Self {
         self.connections = connections;
         self
     }

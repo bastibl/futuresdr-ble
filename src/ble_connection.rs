@@ -905,7 +905,7 @@ impl ConnectionTable {
 }
 
 #[derive(Clone)]
-pub(crate) struct SharedConnectionTable {
+pub struct SharedConnectionTable {
     inner: Arc<RwLock<ConnectionTable>>,
     reporters_remaining: Arc<AtomicUsize>,
 }
@@ -920,7 +920,7 @@ impl Default for SharedConnectionTable {
 }
 
 impl SharedConnectionTable {
-    pub(crate) fn with_monitored_channels(channels: &[u8]) -> Self {
+    pub fn with_monitored_channels(channels: &[u8]) -> Self {
         let mut reporter_channels = channels.to_vec();
         reporter_channels.sort_unstable();
         reporter_channels.dedup();
