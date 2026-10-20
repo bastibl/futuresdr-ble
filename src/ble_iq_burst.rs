@@ -33,7 +33,7 @@ pub struct BleIqBurstOptions {
 }
 
 #[derive(Block)]
-#[message_inputs(rx_overflow, frequency)]
+#[message_inputs(frequency)]
 #[message_outputs(wireshark, packets)]
 pub struct BleIqBurstBlock<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
 where
@@ -91,20 +91,6 @@ where
     pub fn with_connections(mut self, connections: SharedConnectionTable) -> Self {
         self.connections = connections;
         self
-    }
-
-    async fn rx_overflow(
-        &mut self,
-        _io: &mut WorkIo,
-        _mo: &mut MessageOutputs,
-        _meta: &BlockMeta,
-        p: Pmt,
-    ) -> Result<Pmt> {
-        let Pmt::U64(sequence) = p else {
-            return Ok(Pmt::InvalidValue);
-        };
-        self.connections.observe_overflow(sequence);
-        Ok(Pmt::Ok)
     }
 
     /// Set the whitening channel using its RF center frequency in Hz.
@@ -572,7 +558,11 @@ mod tests {
                 mocker.post("frequency", Pmt::Null).unwrap(),
                 Pmt::F64(frequency)
             );
-            let mut samples = crate::ble_sim::generate_ble_packet_samples(2, 3, channel);
+            // A real RF retune blanks the ADC briefly, followed by the new
+            // channel's noise. Neither interval should latch the squelch open.
+            let mut samples = vec![Complex32::new(0.0, 0.0); 20_000];
+            samples.extend(std::iter::repeat_n(Complex32::new(0.0001, 0.0), 30_000));
+            samples.extend(crate::ble_sim::generate_ble_packet_samples(2, 3, channel));
             samples.extend(std::iter::repeat_n(Complex32::new(0.0, 0.0), 5000));
             mocker.input().set(samples);
             mocker.run();

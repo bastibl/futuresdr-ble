@@ -105,7 +105,23 @@ impl BurstCatcher {
                     self.burst_buf.push(sample);
                 }
                 if self.capturing && self.burst_buf.len() >= MAX_BURST_SAMPLES {
-                    self.finish(true)
+                    let burst = self.finish(true);
+                    // RF retuning can insert digital silence. A noise floor learned
+                    // in that gap makes real RF noise look like a permanent burst.
+                    // Relearn after an overlong burst using the current AGC level.
+                    if let Squelch::Adaptive {
+                        noise_floor_db,
+                        warmup_samples_remaining,
+                        ..
+                    } = &mut self.squelch
+                    {
+                        *noise_floor_db = None;
+                        *warmup_samples_remaining = ADAPTIVE_SQUELCH_WARMUP_SAMPLES;
+                        self.state = SquelchState::SignalLo;
+                        self.timer = 0;
+                        self.pre_trigger.clear();
+                    }
+                    burst
                 } else {
                     None
                 }

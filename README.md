@@ -70,6 +70,10 @@ in Hz and updates the whitening channel, discarding partial bursts and
 relearning the noise floor. Null queries the current frequency; unsupported
 values return `InvalidValue`. Studio's advertising-channel dropdown sends
 the same frequency to this input and the SDR's `freq` input.
+Adaptive squelch relearns its noise floor after an overlong burst, allowing it
+to recover from digital silence during RF retuning. The unused `rx_overflow`
+message input has been removed; connection-tracking hosts can report sample
+loss directly through `SharedConnectionTable::observe_overflow`.
 
 Match the receiver's whitening channel to the SDR tuning, and its samples per
 symbol to the sample rate (2 MS/s means 2 samples per BLE 1M symbol).

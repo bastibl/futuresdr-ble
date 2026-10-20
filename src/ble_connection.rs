@@ -992,7 +992,9 @@ impl SharedConnectionTable {
             .decode_contexts_for_window(channel_index, start_sample, end_sample, guard_samples)
     }
 
-    pub(crate) fn observe_overflow(&self, sequence: u64) {
+    /// Invalidate connection timing after an RX discontinuity. Repeated or older
+    /// sequence numbers are ignored, allowing receivers to share this table.
+    pub fn observe_overflow(&self, sequence: u64) {
         self.inner
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
