@@ -52,6 +52,10 @@ impl BurstDecoder {
         })
     }
 
+    pub(crate) fn set_channel(&mut self, channel_index: u8) {
+        self.channel_index = channel_index;
+    }
+
     pub(crate) fn decode(
         &self,
         burst: &CapturedBurst,

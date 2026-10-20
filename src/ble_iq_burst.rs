@@ -33,7 +33,7 @@ pub struct BleIqBurstOptions {
 }
 
 #[derive(Block)]
-#[message_inputs(rx_overflow)]
+#[message_inputs(rx_overflow, frequency)]
 #[message_outputs(wireshark, packets)]
 pub struct BleIqBurstBlock<I = DefaultCpuReader<Complex32>, O = DefaultCpuWriter<u8>>
 where
@@ -104,6 +104,38 @@ where
             return Ok(Pmt::InvalidValue);
         };
         self.connections.observe_overflow(sequence);
+        Ok(Pmt::Ok)
+    }
+
+    /// Set the whitening channel using its RF center frequency in Hz.
+    /// Null queries the current frequency. Unsupported values leave it unchanged.
+    async fn frequency(
+        &mut self,
+        _io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &BlockMeta,
+        p: Pmt,
+    ) -> Result<Pmt> {
+        use crate::ble_phy::frequency_hz_from_channel_index;
+        let frequency = match p {
+            Pmt::Null => {
+                return Ok(frequency_hz_from_channel_index(self.channel_index)
+                    .map(Pmt::F64)
+                    .unwrap_or(Pmt::InvalidValue));
+            }
+            Pmt::F64(value) => value,
+            _ => return Ok(Pmt::InvalidValue),
+        };
+        let Some(channel) =
+            (0..40).find(|&channel| frequency_hz_from_channel_index(channel) == Ok(frequency))
+        else {
+            return Ok(Pmt::InvalidValue);
+        };
+        if channel != self.channel_index {
+            self.catcher.reset_for_retune();
+            self.decoder.set_channel(channel);
+            self.channel_index = channel;
+        }
         Ok(Pmt::Ok)
     }
 
@@ -499,6 +531,59 @@ fn add_phase_counts(accumulator: &mut [u64], counts: &[u64]) {
 #[cfg(test)]
 mod tests {
     use super::should_gate_data_burst;
+    use super::*;
+    use futuresdr::runtime::mocker::{Mocker, Reader, Writer};
+
+    #[test]
+    fn frequency_handler_retunes_whitening_and_decodes_all_advertising_channels() {
+        let receiver =
+            BleIqBurstBlock::<Reader<Complex32>, Writer<u8>>::with_packet_and_wireshark_output(
+                BlePhy::Le1M,
+                2,
+                37,
+                crate::gmsk_demod::gmsk_rx_taps(2).unwrap(),
+                SquelchConfig::adaptive(13.0),
+                BleIqBurstOptions::default(),
+            )
+            .unwrap();
+        let mut mocker = Mocker::new(receiver);
+        mocker.init();
+        for invalid in [
+            Pmt::F64(f64::NAN),
+            Pmt::F64(2403e6),
+            Pmt::String("38".into()),
+        ] {
+            assert_eq!(
+                mocker.post("frequency", invalid).unwrap(),
+                Pmt::InvalidValue
+            );
+            assert_eq!(
+                mocker.post("frequency", Pmt::Null).unwrap(),
+                Pmt::F64(2402e6)
+            );
+        }
+        for channel in [38, 39, 37] {
+            let frequency = crate::ble_phy::frequency_hz_from_channel_index(channel).unwrap();
+            assert_eq!(
+                mocker.post("frequency", Pmt::F64(frequency)).unwrap(),
+                Pmt::Ok
+            );
+            assert_eq!(
+                mocker.post("frequency", Pmt::Null).unwrap(),
+                Pmt::F64(frequency)
+            );
+            let mut samples = crate::ble_sim::generate_ble_packet_samples(2, 3, channel);
+            samples.extend(std::iter::repeat_n(Complex32::new(0.0, 0.0), 5000));
+            mocker.input().set(samples);
+            mocker.run();
+            let messages = mocker.take_messages();
+            assert_eq!(messages[1].len(), 3, "channel {channel}");
+            assert!(messages[1].iter().all(|p| matches!(p,
+                Pmt::String(value) if value.contains(&format!("ch={channel} "))
+                    && value.contains("pdu=ADV")
+            )));
+        }
+    }
 
     #[test]
     fn gates_unmatched_follower_data_bursts() {

@@ -24,3 +24,6 @@ ctrlc = "3"
 futuresdr = { path = "../futuresdr", features = ["seify"] }
 futuredsp = { path = "../futuresdr/crates/futuredsp" }
 yagi = "0.1.5"
+
+[dev-dependencies]
+futuresdr = { path = "../futuresdr", features = ["mocker", "seify"] }

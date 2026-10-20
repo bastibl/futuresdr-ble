@@ -45,6 +45,7 @@ enum SquelchState {
 }
 
 pub(crate) struct BurstCatcher {
+    config: SquelchConfig,
     gain: f32,
     signal_level: f32,
     squelch: Squelch,
@@ -61,6 +62,7 @@ pub(crate) struct BurstCatcher {
 impl BurstCatcher {
     pub(crate) fn new(config: SquelchConfig, pre_trigger_samples: usize) -> Self {
         Self {
+            config,
             gain: 1000.0,
             signal_level: 1e-3,
             squelch: Squelch::new(config),
@@ -73,6 +75,14 @@ impl BurstCatcher {
             next_sample_index: 0,
             burst_start_sample_index: 0,
         }
+    }
+
+    /// Discard samples from the previous channel and relearn its noise floor.
+    /// Keep the stream sample clock used by connection tracking.
+    pub(crate) fn reset_for_retune(&mut self) {
+        let next_sample_index = self.next_sample_index;
+        *self = Self::new(self.config, self.pre_trigger_samples);
+        self.next_sample_index = next_sample_index;
     }
 
     pub(crate) fn execute(&mut self, sample: Complex32) -> Option<CapturedBurst> {
@@ -319,6 +329,23 @@ impl Squelch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retuning_discards_partial_bursts_but_preserves_the_stream_clock() {
+        let mut catcher = BurstCatcher::new(SquelchConfig::adaptive(8.0), 8);
+        for _ in 0..4000 {
+            catcher.execute(Complex32::new(0.001, 0.0));
+        }
+        for _ in 0..400 {
+            catcher.execute(Complex32::new(0.1, 0.0));
+        }
+        assert!(catcher.capturing);
+        catcher.reset_for_retune();
+        assert_eq!(catcher.next_sample_index, 4400);
+        assert!(catcher.finish(false).is_none());
+        assert!(catcher.pre_trigger.is_empty());
+        assert!(catcher.squelch.is_warming_up());
+    }
 
     #[test]
     fn adaptive_squelch_separates_a_burst_from_noise() {

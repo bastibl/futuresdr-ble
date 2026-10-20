@@ -65,6 +65,12 @@ and the optional `wireshark` blob output. Both outputs send `Finished` at EOF
 FutureSDR Studio registers the receiver using
 `crates/studio/blocks/ble_receiver.toml` and supplies a native-UHD advertising
 channel 37 demo at 2.402 GHz / 2 MS/s, plus a deterministic simulation demo.
+The receiver's `frequency` message input accepts an F64 RF center frequency
+in Hz and updates the whitening channel, discarding partial bursts and
+relearning the noise floor. Null queries the current frequency; unsupported
+values return `InvalidValue`. Studio's advertising-channel dropdown sends
+the same frequency to this input and the SDR's `freq` input.
+
 Match the receiver's whitening channel to the SDR tuning, and its samples per
 symbol to the sample rate (2 MS/s means 2 samples per BLE 1M symbol).
 
