@@ -21,7 +21,6 @@ uhd = ["futuresdr/uhd"]
 anyhow = "1.0"
 futuresdr = { version = "0.10", features = ["seify"] }
 futuredsp = "0.10"
-yagi = "0.1.5"
 web-time = "1.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

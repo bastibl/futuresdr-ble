@@ -1,224 +1,214 @@
 # Bluetooth Low Energy Sniffer
 
-## Introduction
+This crate implements a continuous BLE 1M receiver for FutureSDR. It filters IQ,
+recovers instantaneous frequency and symbol timing, searches for access
+addresses, dewhitens PDUs, validates CRCs, and reports advertising and tracked
+connection packets.
 
-This example implements a Bluetooth Low Energy sniffer for FutureSDR. It
-receives BLE 1M signals from an SDR, demodulates GFSK packets, performs
-dewhitening and CRC validation, and prints decoded link-layer packet summaries.
-
-This standalone crate is based on the Bluetooth sniffer contributed by
+It is based on the Bluetooth sniffer contributed by
 [@mucaglar](https://github.com/mucaglar) in
-[FutureSDR pull request #244](https://github.com/FutureSDR/FutureSDR/pull/244).
-It uses the local `../futuresdr` checkout, including its `futuredsp` crate.
-Keep these sibling repositories together when building this checkout.
+[FutureSDR pull request #244](https://github.com/FutureSDR/FutureSDR/pull/244),
+and uses FutureSDR and `futuredsp` 0.10.
 
-The sniffer supports direct reception of a single BLE channel and PFB-based
-reception of multiple selected channels. It parses legacy and extended
-advertising headers, advertising data, and `CONNECT_IND` parameters. Connection
-following uses the captured access address, CRC initialization, channel map,
-and channel-selection parameters to inspect BLE data packets on monitored data
-channels.
+The crate has one executable, `sniffer`. All reception is continuous: every IQ
+sample passes through stream buffers. There is no energy-triggered capture,
+squelch, mode selector, or IQ/sample transport through PMTs.
 
-Two decoder modes are available:
+## Quick start
 
-- `continuous` processes the complete sample stream and is the default for a
-  single channel.
-- `burst` detects signal bursts before decoding and is the default for
-  multi-channel reception.
-
-## Hardware Backends
-
-The default feature enables SoapySDR:
+The repository selects nightly Rust through `rust-toolchain.toml`.
+Simulation does not require SDR hardware or a hardware backend:
 
 ```sh
-cargo run --release -- --args driver=soapy
+cargo run --release --no-default-features -- --simulate --simulate-packets 10
 ```
 
-To use the native RTL-SDR backend instead:
+For live reception through SoapySDR (the default feature):
 
 ```sh
-cargo run --release --no-default-features --features rtlsdr -- \
-  --args driver=rtlsdr
+cargo run --release -- --args driver=soapy --channels 37 --gain 30
 ```
 
-Simulation and offline IQ decoding do not require an SDR backend and can be
-built with `--no-default-features`.
-
-For the Rust-native USRP B2xx driver:
+Channel 37 is at 2.402 GHz; the default sample rate is 2 MS/s. Stop live reception
+with Ctrl+C, or add `--duration 30`. `--quiet` suppresses individual packets while
+retaining the final statistics. See all options with:
 
 ```sh
+cargo run --no-default-features -- --help
+```
+
+Other hardware backends can be selected at build time:
+
+```sh
+cargo run --release --no-default-features --features rtlsdr -- --args driver=rtlsdr
 cargo run --release --no-default-features --features uhd -- --args driver=uhd
 ```
 
-## Library integration
+## Streaming architecture
 
-The library exports `BleIqBurstBlock`, `BleIqBurstOptions`, `SquelchConfig`, and
-`BlePhy`. The block is generic over its CPU input/output buffer types, so a
-host can select its own compatible buffers without wrapping the decoder.
-The command-line sniffer uses the same library.
+Each selected channel uses three independently scheduled FutureSDR blocks:
 
-The `packets` message output emits `Pmt::String` summaries of CRC-validated
-advertising and data packets. It operates independently of console printing
-and the optional `wireshark` blob output. Both outputs send `Finished` at EOF
-(the Wireshark output only when enabled).
-
-FutureSDR Studio registers the receiver using
-`crates/studio/blocks/ble_receiver.toml` and supplies a native-UHD advertising
-channel 37 demo at 2.402 GHz / 2 MS/s, plus a deterministic simulation demo.
-The receiver's `frequency` message input accepts an F64 RF center frequency
-in Hz and updates the whitening channel, discarding partial bursts and
-relearning the noise floor. Null queries the current frequency; unsupported
-values return `InvalidValue`. Studio's advertising-channel dropdown sends
-the same frequency to this input and the SDR's `freq` input.
-Adaptive squelch relearns its noise floor after an overlong burst, allowing it
-to recover from digital silence during RF retuning. The unused `rx_overflow`
-message input has been removed; connection-tracking hosts can report sample
-loss directly through `SharedConnectionTable::observe_overflow`.
-
-Match the receiver's whitening channel to the SDR tuning, and its samples per
-symbol to the sample rate (2 MS/s means 2 samples per BLE 1M symbol).
-
-## Single-Channel Reception
-
-Run the receiver from this directory:
-
-```sh
-cargo run --release
+```mermaid
+flowchart LR
+    Source[IQ source / PFB output] -->|Complex32 + tags| Demod[BleGfskDemodBlock]
+    Demod -->|f32 frequency + tags| Sync[BleSymbolSyncBlock]
+    Sync -->|Complex32 soft symbols + tags| Decoder[BlePacketDecoderBlock]
+    Sync -->|same soft-symbol stream| Plot[Constellation viewer]
+    Decoder -->|packet summary PMTs| Host[Host]
+    Decoder -->|RFTap blob PMTs| UDP[BlobToUdp]
 ```
 
-The default configuration receives BLE advertising channel 37 with gain 30 and
-the continuous decoder. Stop the receiver with Ctrl+C. A fixed duration can be
-specified when using SDR hardware:
+| Block | Work |
+| --- | --- |
+| `BleGfskDemodBlock` | Causal receive FIR, quadrature demodulation, continuous tracking of the two frequency levels, CFO/deviation normalization |
+| `BleSymbolSyncBlock` | Stateful Mueller and Müller timing recovery with interpolation and bounded symbol-period tracking |
+| `BlePacketDecoderBlock` | Soft-symbol sign decisions, incremental access-address/PDU synchronization, dewhitening, CRC validation, connection tracking, packet output |
 
-```sh
-cargo run --release -- --channels 37 --gain 30 --duration 30
+Filter history, frequency estimates, interpolation state, and partial packets
+survive work calls. Output buffers provide normal stream backpressure. EOF
+flushes the causal FIR tail before downstream blocks drain. Only complete,
+CRC-valid packets are emitted through PMTs.
+
+The minimum input rate is 2 samples per BLE symbol (2 MS/s). Timing recovery
+accepts fractional samples-per-symbol rates; the channel low-pass filter is
+designed for the actual input sample rate. The deterministic IQ
+simulator requires an integer samples-per-symbol rate.
+
+## Library integration and constellation
+
+After creating an IQ source in a `Flowgraph`, connect the stream stages:
+
+```rust,ignore
+use futuresdr::blocks::VectorSink;
+use futuresdr::prelude::*;
+use futuresdr_ble::*;
+
+let demod: BleGfskDemodBlock = BleGfskDemodBlock::new(
+    BlePhy::Le1M, 2e6, 37, gfsk_rx_taps(2e6)?,
+)?;
+let symbols: BleSymbolSyncBlock = BleSymbolSyncBlock::new(2.0)?;
+let decoder: BlePacketDecoderBlock = BlePacketDecoderBlock::new(
+    BlePhy::Le1M, 2e6, 37, BlePacketDecoderOptions::default(),
+)?;
+let demod = fg.add(demod)?;
+let symbols = fg.add(symbols)?;
+let decoder = fg.add(decoder)?;
+let plot = fg.add(VectorSink::<Complex32>::new(1024))?;
+connect!(fg, source > demod > symbols > decoder);
+connect!(fg, symbols > plot);
 ```
 
-Use the burst decoder explicitly with:
+`BleSymbolSyncBlock.output` is the actual constellation input to the decoder's
+bit decisions. Samples are `Complex32(normalized_frequency, 0)`, normally near
+−1 or +1 on the real axis. Values preserve noise and amplitude variation;
+they are not clipped, converted to phase angles, or filtered by CRC success.
+One timing-recovered symbol stream feeds both the decoder and the viewer.
+There is no constellation PMT output or enable flag. The CLI prints packet
+summaries; a graphical viewer can be attached through the library API.
 
-```sh
-cargo run --release -- --channels 37 --decoder burst --gain 30
-```
+The decoder's `packets` message output emits `Pmt::String` summaries. With
+`BlePacketDecoderOptions.wireshark_output`, its `wireshark` output emits
+`Pmt::Blob` RFTap packets. They send `Finished` at EOF (`wireshark` when enabled).
 
-Advertising channels 37, 38, and 39 can be selected by channel number:
+For multiple channels, give packet decoders the same `SharedConnectionTable`
+using `with_connections`.
 
-```sh
-cargo run --release -- --channels 38 --decoder burst --gain 30
-```
+## Stream tags and retuning
 
-Use `--quiet` to suppress individual packet lines while retaining the final
-statistics:
+The `ble` tag is `Tag::NamedAny` containing a public `BleStreamMetadata`:
 
-```sh
-cargo run --release -- --channels 37 --decoder burst --quiet
-```
+| Field | Meaning |
+| --- | --- |
+| `phy`, `channel_index` | BLE PHY and whitening channel at the tagged item |
+| `sample_rate_hz` | Original per-channel IQ sample rate |
+| `sample_index` | Original IQ sample clock at the tagged item |
+| `sample_delay` | FIR/discriminator delay in IQ samples |
+| `discontinuity` | Reset DSP and partial-packet state before the tagged item |
 
-## Multi-Channel Reception
+The demodulator inserts initial metadata. It also accepts source metadata tags
+created with `BleStreamMetadata::to_tag`; callers can inspect them with
+`BleStreamMetadata::from_tag`. The default source clock starts at zero and
+counts consumed IQ samples. A source can supply its own sample-clock anchor.
 
-A comma-separated channel list selects PFB-based multi-channel reception.
+The symbol synchronizer maps metadata and other source tags to the first output
+symbol at or after the tagged input. On the symbol stream, each `Tag::Id(u64)`
+identifies that symbol's rounded original IQ sample index, compensating FIR
+and discriminator delay. `Tag::Id` is reserved for this source-clock meaning
+on BLE symbol streams. The packet decoder uses these timestamps for connection
+tracking instead of treating compacted symbol indices as IQ sample indices.
+
+The demodulator's `frequency` message input accepts an F64 RF center frequency
+in Hz. A retune resets its filter/frequency state and inserts metadata with the
+new channel and a discontinuity at the next consumed sample, preserving the
+running source clock. The downstream synchronizer and decoder reset at that
+same tagged boundary. Null queries the frequency; invalid frequencies return
+`InvalidValue`. Send the same frequency to the SDR's `freq` input.
+
+Changing sample rate requires rebuilding the receive filter and flowgraph.
+Hosts can report sample loss to `SharedConnectionTable::observe_overflow`.
+
+## Multiple channels and connection following
+
+A comma-separated list enables PFB channelization, followed by a continuous
+receiver on each selected output:
 
 ```sh
 cargo run --release -- --channels 37,0 --gain 30
-cargo run --release -- --channels 38,10,11 --gain 30
-```
-
-Connection following can be enabled when the channel list contains an
-advertising channel and one or more data channels:
-
-```sh
 cargo run --release -- --channels 38,10,11 --follow-connections --gain 30
 ```
 
-The follower records CRC-valid `CONNECT_IND` packets, predicts CSA #1 and
-CSA #2 connection events, validates data-channel packets with the
-connection-specific access address and CRC initialization, and processes
-link-layer connection and channel-map updates.
+The SDR must support the required bandwidth. If the default rate is left at
+2 MS/s, the CLI automatically chooses a suitable multi-channel input rate.
+Each selected PFB channel is sampled at 2 MS/s. Multiple channels currently
+require hardware input.
 
-The continuous decoder can also be selected explicitly for a multi-channel
-flowgraph:
+The follower learns access addresses, CRC initialization, and channel-selection
+parameters from `CONNECT_IND`, predicts CSA #1/#2 events, and validates data
+PDUs using connection-specific contexts. `--follow-connections` restricts data
+access-address searches to predicted windows; filtering, demodulation, and
+timing recovery still process every input sample. It requires at least two
+selected channels. Link-layer connection/channel-map updates remain supported.
 
-```sh
-cargo run --release -- --channels 38,10,11 --decoder continuous --gain 30
-```
+## Offline IQ and Wireshark
 
-## Simulation
-
-Simulation mode generates BLE advertising packets and passes them through the
-GMSK receive chain without SDR hardware:
-
-```sh
-cargo run --release --no-default-features -- \
-  --simulate --decoder burst --simulate-packets 10
-```
-
-The flowgraph runs until all generated samples have been processed.
-
-## Offline IQ Input
-
-Complex `f32` IQ recordings can be decoded with `--iq-file`. Samples use the
-native `Complex32` layout expected by FutureSDR's `FileSource`, with interleaved
-little-endian values:
-
-```text
-I0 Q0 I1 Q1 I2 Q2 ...
-```
-
-The selected channel must match the recording center frequency, and the sample
-rate must match the recorded waveform:
+Files contain interleaved `f32` IQ samples (`I0 Q0 I1 Q1 ...`). Match the selected
+channel and sample rate to the recording:
 
 ```sh
 cargo run --release --no-default-features -- \
-  --iq-file ble_capture.iq --sample-rate 2e6 --channels 37 --decoder burst --quiet
+  --iq-file capture.iq --sample-rate 2e6 --channels 37 --quiet
 ```
 
-File input runs to EOF and then shuts down automatically.
+Finite sources run to EOF; `--duration` applies only to live hardware.
 
-## Wireshark
-
-Decoded advertising and data packets can be streamed live to Wireshark over
-UDP using RFTap encapsulation:
+To stream decoded packets to Wireshark:
 
 ```sh
-cargo run --release -- --channels 37 --decoder burst --wireshark
+cargo run --release -- --channels 37 --wireshark
 ```
 
-The default destination is `127.0.0.1:55556`. Capture the loopback interface in
-Wireshark and configure UDP port 55556 with **Decode As...** `RFTap`. The `btle`
-display filter then shows decoded BLE link-layer packets.
+The default destination is `127.0.0.1:55556`; override it with
+`--wireshark-addr`. Capture loopback traffic and configure UDP port 55556 with
+**Decode As… → RFTap**. Use the `btle` display filter.
 
-Useful display filters include:
-
-```text
-btle
-btle.access_address == 0x8e89bed6
-btle && btle.access_address != 0x8e89bed6
-```
-
-The destination can be changed when required:
+## Validation and design references
 
 ```sh
-cargo run --release -- --channels 37 --decoder burst --wireshark --wireshark-addr 127.0.0.1:55556
+cargo test --no-default-features
+cargo test --no-default-features --test stream_pipeline
 ```
 
-## Output
+Tests exercise fragmented input, output backpressure, source-clock and channel
+tags, EOF, packet outputs, and constellation fanout. Protocol tests cover CRC,
+whitening, connection following, and link-layer control handling.
 
-Decoded packets are printed in a compact form:
-
-```text
-BLE packet: ch=37 phy=1M pdu=ADV_IND payload_len=24 adv_a=57:41:78:10:B4:06(random) ad=[flags=0x1A, tx_power=12dBm, mfg=Apple(0x004C)/8B]
-BLE packet: ch=38 phy=1M pdu=ADV_EXT_IND payload_len=7 ext=[mode=connectable adi=0x3F02 aux_ch=31 aux_offset=1170us aux_phy=2M]
-```
-
-On shutdown, each decoder prints CRC and packet statistics:
-
-```text
-BLE summary: ch=37 mode=continuous packets=8738 connect_ind=0 crc_passes=8738 crc_checks=12613 crc_pass_rate=69.3%
-BLE summary: ch=37 mode=burst packets=9397 connect_ind=0 crc_passes=8908 crc_checks=10378 crc_pass_rate=85.8%
-```
-
-When connection following is enabled, the receiver also reports tracked data
-packets, connection state, and timing recovery.
+The continuous architecture follows the separation of quadrature demodulation,
+clock recovery, and slicing used by
+[GNU Radio's GFSK demodulator](https://github.com/gnuradio/gnuradio/blob/main/gr-digital/python/digital/gfsk.py)
+and described in [Symbol Sync](https://wiki.gnuradio.org/index.php/Symbol_Sync).
+This remains a BLE 1M receiver; LE 2M/Coded PHYs are not implemented. Synthetic
+regression tests do not establish RF sensitivity or wideband real-time throughput.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+[Apache License, Version 2.0](LICENSE).

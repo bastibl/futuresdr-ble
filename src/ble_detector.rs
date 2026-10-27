@@ -42,11 +42,6 @@ pub(crate) struct PacketDetector {
 }
 
 impl PacketDetector {
-    #[cfg(test)]
-    pub(crate) fn new(phase: usize, channel_index: u8) -> Self {
-        Self::with_packet_output(phase, channel_index, true)
-    }
-
     pub(crate) fn with_packet_output(phase: usize, channel_index: u8, print_packets: bool) -> Self {
         Self {
             phase,
@@ -87,10 +82,6 @@ impl PacketDetector {
 
     pub(crate) fn add_crc_reject(&mut self) {
         self.crc_rejects += 1;
-    }
-
-    pub(crate) fn add_duplicate_crc_reject(&mut self) {
-        self.duplicate_crc_rejects += 1;
     }
 
     pub(crate) fn stats(&self) -> DetectorStats {
@@ -301,6 +292,7 @@ impl DetectorStats {
         self.packets + self.crc_rejects
     }
 
+    #[cfg(test)]
     pub(crate) fn aa_per_packet(&self) -> f64 {
         if self.packets == 0 {
             0.0
@@ -313,6 +305,7 @@ impl DetectorStats {
         percentage(self.packets, self.pdu_attempts())
     }
 
+    #[cfg(test)]
     pub(crate) fn raw_crc_rejects(&self) -> u64 {
         self.crc_rejects + self.duplicate_crc_rejects
     }

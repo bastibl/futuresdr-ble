@@ -3,15 +3,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
-use clap::ValueEnum;
 
 use crate::ble_protocol;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum DecoderMode {
-    Continuous,
-    Burst,
-}
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -26,14 +19,8 @@ pub(crate) struct Args {
     pub(crate) gain: f64,
     #[arg(long)]
     pub(crate) antenna: Option<String>,
-    #[arg(long, value_enum)]
-    pub(crate) decoder: Option<DecoderMode>,
     #[arg(long, default_value_t = false)]
     pub(crate) follow_connections: bool,
-    #[arg(long, allow_hyphen_values = true)]
-    pub(crate) squelch_db: Option<f32>,
-    #[arg(long, default_value_t = 13.0)]
-    pub(crate) squelch_margin_db: f32,
     #[arg(long, default_value_t = false)]
     pub(crate) quiet: bool,
     #[arg(long, default_value_t = false)]
@@ -57,34 +44,17 @@ impl Args {
         channels.dedup();
         channels.len() > 1
     }
-
-    pub(crate) fn decoder_mode(&self) -> DecoderMode {
-        self.decoder.unwrap_or(if self.is_multi_channel() {
-            DecoderMode::Burst
-        } else {
-            DecoderMode::Continuous
-        })
-    }
 }
 
 pub(crate) fn validate(args: &Args) -> Result<()> {
     if args.simulate && args.iq_file.is_some() {
         bail!("--simulate and --iq-file cannot be used together");
     }
-    if args.follow_connections && args.decoder_mode() != DecoderMode::Burst {
-        bail!("--follow-connections requires --decoder burst");
-    }
     if args.follow_connections && !args.is_multi_channel() {
         bail!("--follow-connections requires at least two --channels values");
     }
-    if !args.sample_rate.is_finite() || args.sample_rate <= 0.0 {
-        bail!("--sample-rate must be a positive finite value");
-    }
-    if !args.squelch_margin_db.is_finite() || args.squelch_margin_db <= 0.0 {
-        bail!("--squelch-margin-db must be a positive finite value");
-    }
-    if args.squelch_db.is_some_and(|value| !value.is_finite()) {
-        bail!("--squelch-db must be finite");
+    if !args.sample_rate.is_finite() || args.sample_rate < 2.0e6 {
+        bail!("--sample-rate must be finite and at least 2 MS/s");
     }
 
     Ok(())
@@ -108,46 +78,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn single_channel_defaults_to_continuous_decoder() {
+    fn defaults_to_advertising_channel_37() {
         let args = Args::try_parse_from(["sniffer"]).unwrap();
-
-        assert!(!args.is_multi_channel());
-        assert_eq!(args.decoder_mode(), DecoderMode::Continuous);
-        assert_eq!(selected_channels(&args).unwrap(), vec![37]);
+        assert_eq!(selected_channels(&args).unwrap(), [37]);
+        validate(&args).unwrap();
     }
 
     #[test]
-    fn one_explicit_channel_selects_single_channel_mode() {
-        let args = Args::try_parse_from(["sniffer", "--channels", "38"]).unwrap();
-
-        assert!(!args.is_multi_channel());
-        assert_eq!(args.decoder_mode(), DecoderMode::Continuous);
-        assert_eq!(selected_channels(&args).unwrap(), vec![38]);
-    }
-
-    #[test]
-    fn channel_list_selects_multi_channel_burst_mode() {
-        let args = Args::try_parse_from(["sniffer", "--channels", "37,38"]).unwrap();
-
+    fn multi_channel_following_uses_continuous_receiver() {
+        let args = Args::try_parse_from(["sniffer", "--channels", "37,0", "--follow-connections"])
+            .unwrap();
         assert!(args.is_multi_channel());
-        assert_eq!(args.decoder_mode(), DecoderMode::Burst);
-        assert_eq!(selected_channels(&args).unwrap(), vec![37, 38]);
+        assert_eq!(selected_channels(&args).unwrap(), [0, 37]);
+        validate(&args).unwrap();
     }
 
     #[test]
-    fn multi_channel_decoder_can_be_overridden() {
-        let args =
-            Args::try_parse_from(["sniffer", "--channels", "37,38", "--decoder", "continuous"])
-                .unwrap();
-
-        assert_eq!(args.decoder_mode(), DecoderMode::Continuous);
+    fn removes_mode_and_squelch_flags() {
+        for flags in [
+            ["--decoder", "burst"],
+            ["--decoder", "continuous"],
+            ["--squelch-db", "10"],
+            ["--squelch-margin-db", "13"],
+        ] {
+            assert!(Args::try_parse_from(["sniffer", flags[0], flags[1]]).is_err());
+        }
     }
 
     #[test]
-    fn duplicate_channels_still_select_single_channel_mode() {
-        let args = Args::try_parse_from(["sniffer", "--channels", "37,37"]).unwrap();
-
-        assert!(!args.is_multi_channel());
-        assert_eq!(selected_channels(&args).unwrap(), vec![37]);
+    fn rejects_insufficient_sample_rate_and_single_channel_following() {
+        let args = Args::try_parse_from(["sniffer", "--sample-rate", "1e6"]).unwrap();
+        assert!(validate(&args).is_err());
+        let args = Args::try_parse_from(["sniffer", "--follow-connections"]).unwrap();
+        assert!(validate(&args).is_err());
     }
 }

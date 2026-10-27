@@ -676,6 +676,7 @@ impl ConnectionTable {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_packet(&mut self, packet: &BlePacket) {
         self.observe_packet_with_timing(packet, None);
     }
@@ -932,6 +933,7 @@ impl SharedConnectionTable {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_packet(&self, packet: &BlePacket) {
         self.inner
             .write()

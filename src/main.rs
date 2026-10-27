@@ -9,9 +9,7 @@ use futuresdr::runtime::Error as RuntimeError;
 
 use crate::cli::Args;
 
-use futuresdr_ble::{
-    ble_connection, ble_iq_burst, ble_protocol, ble_sim, ble_sync, channelizer, gmsk_demod,
-};
+use futuresdr_ble::{ble_connection, ble_protocol, ble_sim, channelizer};
 
 mod cli;
 mod flowgraph;
@@ -20,7 +18,7 @@ fn main() -> Result<()> {
     futuresdr::runtime::init();
     let args = Args::parse();
 
-    println!("Starting Bluetooth GMSK sniffer example");
+    println!("Starting continuous Bluetooth LE sniffer");
     let mut fg = Flowgraph::new();
     let selected_channels = cli::selected_channels(&args)?;
     let mut sample_rate = args.sample_rate;
