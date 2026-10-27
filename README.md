@@ -60,7 +60,7 @@ flowchart LR
 
 | Block | Work |
 | --- | --- |
-| `BleGfskDemodBlock` | Causal receive FIR, quadrature demodulation, continuous tracking of the two frequency levels, CFO/deviation normalization |
+| `BleGfskDemodBlock` | Causal receive FIR, quadrature demodulation, confidence-based acquisition and tracking of the two frequency levels, CFO/deviation normalization |
 | `BleSymbolSyncBlock` | Stateful Mueller and Müller timing recovery with interpolation and bounded symbol-period tracking |
 | `BlePacketDecoderBlock` | Soft-symbol sign decisions, incremental access-address/PDU synchronization, dewhitening, CRC validation, connection tracking, packet output |
 
@@ -199,7 +199,14 @@ cargo test --no-default-features --test stream_pipeline
 ```
 
 Tests exercise fragmented input, output backpressure, source-clock and channel
-tags, EOF, packet outputs, and constellation fanout. Protocol tests cover CRC,
+tags, EOF, packet outputs, and constellation fanout. Gaussian BT=0.5 packet
+tests vary SNR, transmitter frequency, fractional arrival time, clock error,
+payload, and absolute signal power, with noise-only gaps between packets.
+The frequency estimator acquires quickly from a credible constant-envelope
+signal, then tracks slowly; noise and short runs of identical bits must not
+repeatedly move the decision threshold. This confidence check only controls
+estimator updates: samples always pass through the stream.
+Protocol tests cover CRC,
 whitening, connection following, and link-layer control handling.
 
 The continuous architecture follows the separation of quadrature demodulation,

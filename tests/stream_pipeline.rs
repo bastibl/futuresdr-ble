@@ -393,6 +393,123 @@ fn continuous_receiver_decodes_noisy_iq_with_carrier_offset() -> Result<()> {
     Ok(())
 }
 
+// Gaussian BT=0.5 transmitter at 16 samples/symbol, resampled to the receiver's
+// 2 MS/s clock. Each packet has a different payload, fractional start, carrier
+// offset and initial phase, separated by noise-only input (no burst tags).
+fn gaussian_advertisements(
+    count: usize,
+    snr_db: f64,
+    cfo_hz: f64,
+    mut seed: u32,
+) -> Vec<Complex32> {
+    let mut uniform = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (f64::from(seed) + 0.5) / (f64::from(u32::MAX) + 1.0)
+    };
+    let sigma = (0.5 * 10.0f64.powf(-snr_db / 10.0)).sqrt();
+    let mut noise = || {
+        let r = (-2.0 * uniform().ln()).sqrt() * sigma;
+        let angle = std::f64::consts::TAU * uniform();
+        Complex32::new((r * angle.cos()) as f32, (r * angle.sin()) as f32)
+    };
+    let mut samples = Vec::new();
+    // Gaussian impulse response: -3 dB bandwidth BT=0.5, unit DC gain.
+    let taps: Vec<f64> = (-32..=32)
+        .map(|i| {
+            (-2.0 * (std::f64::consts::PI * 0.5 * i as f64 / 16.0).powi(2) / std::f64::consts::LN_2)
+                .exp()
+        })
+        .collect();
+    let gain: f64 = taps.iter().sum();
+    for packet in 0..count {
+        for _ in 0..(1200 + packet * 17 % 400) {
+            samples.push(noise());
+        }
+        let mut pdu = vec![0x02, 37]; // maximum-length ADV_NONCONN_IND
+        pdu.extend((0..37).map(|i| (packet * 97 + i * 53 + i * i * 11) as u8));
+        let crc = ble_protocol::crc24_ble(&pdu, ble_protocol::BLE_ADV_CRC_INIT);
+        pdu.extend_from_slice(&crc.to_le_bytes()[..3]);
+        let mut bytes = vec![0xaa];
+        bytes.extend_from_slice(&ble_protocol::BLE_ACCESS_ADDRESS.to_le_bytes());
+        bytes.extend(ble_protocol::apply_whitening(37, &pdu).unwrap());
+        let bits: Vec<_> = bytes
+            .into_iter()
+            .flat_map(|byte| (0..8).map(move |i| if byte & (1 << i) == 0 { -1.0 } else { 1.0 }))
+            .collect();
+        let mut phase = packet as f64 * 1.37;
+        let mut tx = Vec::new();
+        // Leave two symbols of RF after the CRC for the receive filter to
+        // drain, and start with a settled preamble tone.
+        for i in 0..(bits.len() + 2) * 16 {
+            let frequency: f64 = taps
+                .iter()
+                .enumerate()
+                .map(|(j, tap)| {
+                    let bit = (i as isize + j as isize - 32).div_euclid(16);
+                    let symbol = if bit < 0 {
+                        bits[0]
+                    } else {
+                        *bits.get(bit as usize).unwrap_or(bits.last().unwrap())
+                    };
+                    symbol * tap / gain
+                })
+                .sum();
+            let cfo = if cfo_hz == 0.0 {
+                0.0
+            } else if packet % 2 == 0 {
+                cfo_hz
+            } else {
+                -cfo_hz
+            };
+            phase += std::f64::consts::TAU * (250_000.0 * frequency + cfo) / 16e6;
+            tx.push(Complex32::from_polar(1.0, phase as f32));
+        }
+        let clock_error = if packet % 2 == 0 { 40e-6 } else { -40e-6 };
+        let mut position = (packet as f64 * 0.618_033_988_75).fract() * 8.0;
+        while position + 1.0 < tx.len() as f64 {
+            let i = position as usize;
+            let fraction = (position - i as f64) as f32;
+            samples.push(tx[i] + (tx[i + 1] - tx[i]) * fraction + noise());
+            position += 8.0 / (1.0 + clock_error);
+        }
+    }
+    samples.extend((0..200).map(|_| noise()));
+    samples
+}
+
+#[test]
+fn gaussian_packet_recovery_survives_noise_gaps_and_transmitter_changes() -> Result<()> {
+    // Maximum-length packets expose threshold drift that the short rectangular
+    // transmitter fixture misses. These are recovery floors, not an RF
+    // sensitivity claim. In particular, weak input must never retrain the
+    // threshold with fast acquisition on each noisy eight-bit window.
+    for seed in [0x8457_6123, 0x12ab_9034] {
+        for (snr, minimum) in [(30.0, 44), (15.0, 40), (12.0, 34), (10.0, 15)] {
+            for cfo in [0.0, 150_000.0] {
+                let mut samples = gaussian_advertisements(48, snr, cfo, seed);
+                // Repeat at a much smaller absolute power. Estimator confidence
+                // must depend on signal quality, rather than a fixed squelch.
+                if seed == 0x12ab_9034 {
+                    samples.iter_mut().for_each(|sample| *sample *= 0.01);
+                }
+                let (_, _, messages) = streaming_samples(&samples, &[], 4096, 4096)?;
+                let received = messages[1]
+                    .iter()
+                    .filter(|m| matches!(m, Pmt::String(_)))
+                    .count();
+                println!("RECOVERY seed={seed:x} snr={snr} cfo={cfo} received={received}/48");
+                assert!(
+                    received >= minimum,
+                    "seed={seed:x} SNR={snr} CFO={cfo}: {received}/48 packets, expected at least {minimum}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn timing_recovery_decodes_fractional_clock_offsets_without_restart() -> Result<()> {
     let bits = ble_protocol::generate_ble_packet_bits(37);

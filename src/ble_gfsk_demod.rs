@@ -5,6 +5,11 @@ use anyhow::{Result, ensure};
 use futuresdr::num_complex::Complex32;
 use futuresdr::runtime::dev::prelude::*;
 
+const LEVEL_TRACKING_GAIN: f32 = 0.02;
+const ACQUISITION_POWER_VARIANCE: f32 = 0.2;
+const TRACKING_POWER_VARIANCE: f32 = 0.35;
+const UNLOCK_WINDOWS: usize = 4;
+
 /// IQ stream → normalized frequency stream, with tagged BLE metadata.
 ///
 /// Every input sample is processed. Filter history, previous phase and the two
@@ -32,6 +37,9 @@ where
     low: f32,
     frequencies: [f32; 16],
     frequency_count: usize,
+    powers: [f32; 16],
+    estimator_confident: bool,
+    incoherent_windows: usize,
     frequency_head: usize,
     tail_remaining: Option<usize>,
     started: bool,
@@ -70,6 +78,9 @@ where
             low: 0.0,
             frequencies: [0.0; 16],
             frequency_count: 0,
+            powers: [0.0; 16],
+            estimator_confident: false,
+            incoherent_windows: 0,
             frequency_head: 0,
             tail_remaining: None,
             started: false,
@@ -88,6 +99,8 @@ where
         self.high = self.nominal_deviation;
         self.low = -self.nominal_deviation;
         self.frequency_count = 0;
+        self.estimator_confident = false;
+        self.incoherent_windows = 0;
         self.frequency_head = 0;
     }
 
@@ -116,27 +129,60 @@ where
             return 0.0;
         }
         let nominal = self.nominal_deviation;
-        // Short rolling quantiles acquire both tones after noise without a
-        // decision threshold that can lock onto only one of the two levels.
-        // Retain the estimate during long equal-bit runs. No samples are gated.
+        // Acquire from both tones of a constant-envelope signal. Noise has a
+        // much higher relative power variance and must not train the slicer.
+        // Once acquired, track gently: replacing the levels from every eight
+        // bits turns payload imbalance and noise into artificial carrier drift.
+        // Confidence only controls the estimator; every sample is output.
         if frequency.abs() < 0.95 {
             self.frequencies[self.frequency_head] = frequency;
+            self.powers[self.frequency_head] = filtered.norm_sqr();
             self.frequency_head = (self.frequency_head + 1) % self.frequencies.len();
             self.frequency_count = (self.frequency_count + 1).min(self.frequencies.len());
             if self.frequency_count == self.frequencies.len()
                 && self.frequency_head.is_multiple_of(4)
             {
-                let mut sorted = self.frequencies;
-                sorted.sort_unstable_by(f32::total_cmp);
-                let low = sorted[2];
-                let high = sorted[13];
-                let span = high - low;
-                if span >= nominal * 0.5
-                    && span <= nominal * 3.0
-                    && ((high + low) * 0.5).abs() <= nominal * 0.9
-                {
-                    self.high = high;
-                    self.low = low;
+                let mean_power = self.powers.iter().sum::<f32>() / 16.0;
+                let power_variance = self
+                    .powers
+                    .iter()
+                    .map(|p| (p - mean_power).powi(2))
+                    .sum::<f32>()
+                    / 16.0;
+                let squared_power = mean_power * mean_power;
+                let coherent = power_variance < TRACKING_POWER_VARIANCE * squared_power;
+                if !coherent {
+                    self.incoherent_windows = (self.incoherent_windows + 1).min(UNLOCK_WINDOWS);
+                    // Hysteresis prevents one noisy window from retriggering
+                    // fast acquisition in the middle of a weak packet. A large
+                    // power step can immediately invalidate an old estimate.
+                    if self.incoherent_windows == UNLOCK_WINDOWS || power_variance > squared_power {
+                        self.estimator_confident = false;
+                    }
+                } else {
+                    self.incoherent_windows = 0;
+                }
+                if coherent {
+                    let mut sorted = self.frequencies;
+                    sorted.sort_unstable_by(f32::total_cmp);
+                    let low = sorted[2];
+                    let high = sorted[13];
+                    let span = high - low;
+                    if span >= nominal
+                        && span <= nominal * 3.0
+                        && ((high + low) * 0.5).abs() <= nominal * 0.9
+                    {
+                        let gain = if self.estimator_confident {
+                            LEVEL_TRACKING_GAIN
+                        } else if power_variance < ACQUISITION_POWER_VARIANCE * squared_power {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        self.high += gain * (high - self.high);
+                        self.low += gain * (low - self.low);
+                        self.estimator_confident |= gain > 0.0;
+                    }
                 }
             }
         }
