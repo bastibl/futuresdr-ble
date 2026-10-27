@@ -35,6 +35,9 @@ where
     frequency_head: usize,
     tail_remaining: Option<usize>,
     started: bool,
+    work_input: Vec<Complex32>,
+    work_output: Vec<f32>,
+    nominal_deviation: f32,
 }
 
 impl<I, O> BleGfskDemodBlock<I, O>
@@ -59,7 +62,7 @@ where
             metadata,
             pending_metadata: true,
             next_sample_index: 0,
-            history: vec![Complex32::new(0.0, 0.0); taps.len()],
+            history: vec![Complex32::new(0.0, 0.0); 2 * taps.len()],
             taps,
             head: 0,
             previous: Complex32::new(0.0, 0.0),
@@ -70,6 +73,9 @@ where
             frequency_head: 0,
             tail_remaining: None,
             started: false,
+            work_input: Vec::new(),
+            work_output: Vec::new(),
+            nominal_deviation: (0.5 * phy.symbol_rate_hz() / sample_rate_hz) as f32,
         };
         block.reset_dsp();
         Ok(block)
@@ -79,21 +85,27 @@ where
         self.history.fill(Complex32::new(0.0, 0.0));
         self.head = 0;
         self.previous = Complex32::new(0.0, 0.0);
-        let deviation =
-            (0.5 * self.metadata.phy.symbol_rate_hz() / self.metadata.sample_rate_hz) as f32;
-        self.high = deviation;
-        self.low = -deviation;
+        self.high = self.nominal_deviation;
+        self.low = -self.nominal_deviation;
         self.frequency_count = 0;
         self.frequency_head = 0;
     }
 
     fn filter_demodulate(&mut self, sample: Complex32) -> f32 {
+        let length = self.taps.len();
+        // Mirrored history gives a contiguous newest-to-oldest window. Keep the
+        // original accumulation order, without an integer division per tap.
         self.history[self.head] = sample;
+        self.history[self.head + length] = sample;
+        let window = &self.history[self.head + 1..self.head + length + 1];
         let mut filtered = Complex32::new(0.0, 0.0);
-        for (lag, &tap) in self.taps.iter().enumerate() {
-            filtered += self.history[(self.head + self.taps.len() - lag) % self.taps.len()] * tap;
+        for (&sample, &tap) in window.iter().rev().zip(&self.taps) {
+            filtered += sample * tap;
         }
-        self.head = (self.head + 1) % self.taps.len();
+        self.head += 1;
+        if self.head == length {
+            self.head = 0;
+        }
         let product = filtered * self.previous.conj();
         self.previous = filtered;
         if product.norm_sqr() == 0.0 {
@@ -103,8 +115,7 @@ where
         if !frequency.is_finite() {
             return 0.0;
         }
-        let nominal =
-            (0.5 * self.metadata.phy.symbol_rate_hz() / self.metadata.sample_rate_hz) as f32;
+        let nominal = self.nominal_deviation;
         // Short rolling quantiles acquire both tones after noise without a
         // decision threshold that can lock onto only one of the two levels.
         // Retain the estimate during long equal-bit runs. No samples are gated.
@@ -183,18 +194,17 @@ where
         _mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
-        let n = self
-            .input
-            .slice()
-            .len()
-            .min(self.output.slice().len())
-            .min(4096);
-        let mut tags: Vec<_> = self
-            .input
-            .slice_with_tags()
-            .1
+        // A slice is a window acquisition, not necessarily a cheap pointer
+        // lookup (Studio's dynamic readers also materialize tags here).
+        let capacity = self.output.slice().len();
+        let (input, input_tags) = self.input.slice_with_tags();
+        let n = input.len().min(capacity).min(4096);
+        self.work_input.clear();
+        self.work_input.extend_from_slice(&input[..n]);
+        self.work_output.resize(n, 0.0);
+        let mut tags: Vec<_> = input_tags
             .iter()
-            .filter(|t| t.index < n)
+            .filter(|tag| tag.index < n)
             .cloned()
             .collect();
         tags.sort_by_key(|tag| tag.index);
@@ -227,7 +237,7 @@ where
                     });
                 }
             }
-            let mut sample = self.input.slice()[index];
+            let mut sample = self.work_input[index];
             if !sample.re.is_finite() || !sample.im.is_finite() {
                 self.reset_dsp();
                 self.metadata.discontinuity = true;
@@ -242,38 +252,40 @@ where
                 self.pending_metadata = false;
             }
             let value = self.filter_demodulate(sample);
-            self.output.slice()[index] = value;
+            self.work_output[index] = value;
             self.next_sample_index += 1;
         }
         if n > 0 {
             self.started = true;
         }
-        {
-            let (_, mut tags) = self.output.slice_with_tags();
-            for tag in output_tags {
-                tags.add_tag(tag.index, tag.tag);
-            }
-        }
         self.input.consume(n);
-        self.output.produce(n);
         if self.input.finished() && self.input.slice().is_empty() {
             let remaining = *self.tail_remaining.get_or_insert(if self.started {
                 self.taps.len() - 1
             } else {
                 0
             });
-            let tail_produced = remaining.min(self.output.slice().len());
-            for index in 0..tail_produced {
-                self.output.slice()[index] = self.filter_demodulate(Complex32::new(0.0, 0.0));
+            let tail_produced = remaining.min(capacity - n);
+            for _ in 0..tail_produced {
+                let value = self.filter_demodulate(Complex32::new(0.0, 0.0));
+                self.work_output.push(value);
                 self.next_sample_index += 1;
             }
-            self.output.produce(tail_produced);
             self.tail_remaining = Some(remaining - tail_produced);
             io.finished = remaining == tail_produced;
         }
+        let produced = self.work_output.len();
+        {
+            let (output, mut tags) = self.output.slice_with_tags();
+            output[..produced].copy_from_slice(&self.work_output);
+            for tag in output_tags {
+                tags.add_tag(tag.index, tag.tag);
+            }
+        }
+        self.output.produce(produced);
         io.call_again = !io.finished
-            && !self.output.slice().is_empty()
-            && (!self.input.slice().is_empty() || self.tail_remaining.is_some_and(|v| v > 0));
+            && capacity > produced
+            && (!self.input.slice().is_empty() || self.tail_remaining.is_some_and(|n| n > 0));
         Ok(())
     }
 }
@@ -289,4 +301,40 @@ pub fn gfsk_rx_taps(sample_rate_hz: f64) -> Result<Vec<f32>> {
         150e3 / sample_rate_hz,
         0.001,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futuresdr::runtime::mocker::{Reader, Writer};
+
+    #[test]
+    fn mirrored_fir_matches_original_accumulation_across_wraps_and_reset() {
+        let taps = vec![0.15, -0.3, 0.25, 0.6, -0.05, 0.35, 0.1];
+        let mut demod = BleGfskDemodBlock::<Reader<Complex32>, Writer<f32>>::new(
+            BlePhy::Le1M,
+            2e6,
+            37,
+            taps.clone(),
+        )
+        .unwrap();
+        let mut history = vec![Complex32::new(0.0, 0.0); taps.len()];
+        let mut head = 0;
+        for index in 0..257 {
+            if index == 103 {
+                demod.reset_dsp();
+                history.fill(Complex32::new(0.0, 0.0));
+                head = 0;
+            }
+            let sample = Complex32::new((index as f32 * 0.37).sin(), (index as f32 * 0.19).cos());
+            history[head] = sample;
+            let mut expected = Complex32::new(0.0, 0.0);
+            for (lag, &tap) in taps.iter().enumerate() {
+                expected += history[(head + taps.len() - lag) % taps.len()] * tap;
+            }
+            head = (head + 1) % taps.len();
+            demod.filter_demodulate(sample);
+            assert_eq!(demod.previous, expected);
+        }
+    }
 }

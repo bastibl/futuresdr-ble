@@ -48,6 +48,7 @@ impl Kernel for TestSource {
 struct LiveReader<T: CpuSample> {
     reader: Reader<T>,
     eof: bool,
+    window_reads: usize,
 }
 impl<T: CpuSample> BufferReader for LiveReader<T> {
     type Inbox = BlockInbox;
@@ -88,9 +89,11 @@ impl<T: CpuSample> BufferReader for LiveReader<T> {
 impl<T: CpuSample> CpuBufferReader for LiveReader<T> {
     type Item = T;
     fn slice(&mut self) -> &[T] {
+        self.window_reads += 1;
         self.reader.slice()
     }
     fn slice_with_tags(&mut self) -> (&[T], &[ItemTag]) {
+        self.window_reads += 1;
         self.reader.slice_with_tags()
     }
     fn consume(&mut self, n: usize) {
@@ -488,5 +491,32 @@ fn resampling_maps_tags_to_a_symbol_at_or_after_the_tagged_input() -> Result<()>
         })
         .unwrap();
     assert!(sample >= 5);
+    Ok(())
+}
+
+#[test]
+fn buffer_windows_are_acquired_per_work_call_instead_of_per_sample() -> Result<()> {
+    // Studio's dynamic native reader materializes tags on a window acquisition.
+    // This guards the interface-call count, independently of the cheap Mocker
+    // implementation, so a sample loop cannot silently reintroduce that cost.
+    let mut demod = Mocker::new(Demod::new(BlePhy::Le1M, 2e6, 37, gfsk_rx_taps(2e6)?)?);
+    demod
+        .input()
+        .reader
+        .set(vec![Complex32::new(0.4, 0.2); 2048]);
+    demod.output().reserve(2048);
+    demod.run();
+    assert!(demod.input().window_reads <= 3);
+    let (frequency, tags) = demod.output().take();
+    let mut sync = Mocker::new(Sync::new(2.0)?);
+    sync.input().reader.set_with_tags(frequency, tags);
+    sync.output().reserve(2048);
+    sync.run();
+    assert!(sync.input().window_reads <= 3);
+    let (symbols, tags) = sync.output().take();
+    let mut decoder = Mocker::new(Decoder::new(BlePhy::Le1M, 2e6, 37, Default::default())?);
+    decoder.input().reader.set_with_tags(symbols, tags);
+    decoder.run();
+    assert!(decoder.input().window_reads <= 3);
     Ok(())
 }

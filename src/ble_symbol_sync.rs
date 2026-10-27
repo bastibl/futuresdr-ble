@@ -33,6 +33,8 @@ where
     previous_symbol: Option<f64>,
     metadata: Option<BleStreamMetadata>,
     pending_tags: Vec<(u64, Tag)>,
+    work_input: Vec<f32>,
+    work_output: Vec<Complex32>,
 }
 
 impl<I, O> BleSymbolSyncBlock<I, O>
@@ -56,6 +58,8 @@ where
             previous_symbol: None,
             metadata: None,
             pending_tags: Vec::new(),
+            work_input: Vec::new(),
+            work_output: Vec::new(),
         })
     }
 
@@ -130,18 +134,15 @@ where
         _mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
-        let n = self
-            .input
-            .slice()
-            .len()
-            .min(self.output.slice().len())
-            .min(4096);
-        let mut tags: Vec<_> = self
-            .input
-            .slice_with_tags()
-            .1
+        let capacity = self.output.slice().len();
+        let (input, input_tags) = self.input.slice_with_tags();
+        let n = input.len().min(capacity).min(4096);
+        self.work_input.clear();
+        self.work_input.extend_from_slice(&input[..n]);
+        self.work_output.clear();
+        let mut tags: Vec<_> = input_tags
             .iter()
-            .filter(|t| t.index < n)
+            .filter(|tag| tag.index < n)
             .cloned()
             .collect();
         tags.sort_by_key(|tag| tag.index);
@@ -157,13 +158,13 @@ where
                     self.pending_tags.push((self.input_index, tag.tag.clone()));
                 }
             }
-            let input = self.input.slice()[index];
+            let input = self.work_input[index];
             ensure!(
                 input.is_finite(),
                 "symbol timing recovery requires finite frequency samples"
             );
             if let Some((value, sample_index, position)) = self.symbol(input) {
-                self.output.slice()[produced] = Complex32::new(value, 0.0);
+                self.work_output.push(Complex32::new(value, 0.0));
                 let mut awaiting = Vec::new();
                 for (tag_index, tag) in self.pending_tags.drain(..) {
                     if tag_index as f64 > position {
@@ -194,7 +195,8 @@ where
             }
         }
         {
-            let (_, mut tags) = self.output.slice_with_tags();
+            let (output, mut tags) = self.output.slice_with_tags();
+            output[..produced].copy_from_slice(&self.work_output);
             for tag in output_tags {
                 tags.add_tag(tag.index, tag.tag);
             }
@@ -202,8 +204,7 @@ where
         self.input.consume(n);
         self.output.produce(produced);
         io.finished = self.input.finished() && self.input.slice().is_empty();
-        io.call_again =
-            !io.finished && !self.input.slice().is_empty() && !self.output.slice().is_empty();
+        io.call_again = !io.finished && capacity > produced && !self.input.slice().is_empty();
         Ok(())
     }
 }

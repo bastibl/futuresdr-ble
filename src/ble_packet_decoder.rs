@@ -47,6 +47,7 @@ where
     data_packets: u64,
     nonfinite_symbols: u64,
     connections: SharedConnectionTable,
+    work_input: Vec<Complex32>,
 }
 
 impl<I> BlePacketDecoderBlock<I>
@@ -73,6 +74,7 @@ where
             data_packets: 0,
             nonfinite_symbols: 0,
             connections: SharedConnectionTable::default(),
+            work_input: Vec::new(),
         })
     }
 
@@ -292,13 +294,13 @@ where
         mo: &mut MessageOutputs,
         _meta: &BlockMeta,
     ) -> Result<()> {
-        let n = self.input.slice().len().min(4096);
-        let mut tags: Vec<_> = self
-            .input
-            .slice_with_tags()
-            .1
+        let (input, input_tags) = self.input.slice_with_tags();
+        let n = input.len().min(4096);
+        self.work_input.clear();
+        self.work_input.extend_from_slice(&input[..n]);
+        let mut tags: Vec<_> = input_tags
             .iter()
-            .filter(|t| t.index < n)
+            .filter(|tag| tag.index < n)
             .cloned()
             .collect();
         tags.sort_by_key(|tag| tag.index);
@@ -313,7 +315,7 @@ where
                     self.sample_index = sample_index;
                 }
             }
-            let value = self.input.slice()[index].re;
+            let value = self.work_input[index].re;
             if let Some(packet) = self.process_symbol(value) {
                 self.post_packet(packet, mo).await?;
             }
